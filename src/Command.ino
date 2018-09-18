@@ -216,22 +216,26 @@ void ExecuteCommand(byte source, const char *Line)
 	// since commands can originate from anywhere.
 	TempEvent.Source = source;
 	GetArgv(Line, cmd, 1);
-	if (GetArgv(Line, TmpStr1, 2)) TempEvent.Par1 = str2int(TmpStr1);
-	if (GetArgv(Line, TmpStr1, 3)) TempEvent.Par2 = str2int(TmpStr1);
-	if (GetArgv(Line, TmpStr1, 4)) TempEvent.Par3 = str2int(TmpStr1);
-	if (GetArgv(Line, TmpStr1, 5)) TempEvent.Par4 = str2int(TmpStr1);
-	if (GetArgv(Line, TmpStr1, 6)) TempEvent.Par5 = str2int(TmpStr1);
+  if (GetArgv(Line, TmpStr1, 2)) TempEvent.Par1 = CalculateParam(TmpStr1);
+	if (GetArgv(Line, TmpStr1, 3)) TempEvent.Par2 = CalculateParam(TmpStr1);
+	if (GetArgv(Line, TmpStr1, 4)) TempEvent.Par3 = CalculateParam(TmpStr1);
+	if (GetArgv(Line, TmpStr1, 5)) TempEvent.Par4 = CalculateParam(TmpStr1);
+	if (GetArgv(Line, TmpStr1, 6)) TempEvent.Par5 = CalculateParam(TmpStr1);
 
-  if (source == VALUE_SOURCE_WEB_FRONTEND) {
+  // FIXME: TD-er  Disabling scheduling commands.
+  // Gives too much issues.
+  // if (source == VALUE_SOURCE_WEB_FRONTEND) {
     // Must run immediately, to see result in web frontend
     String status = doExecuteCommand((char*)&cmd[0], &TempEvent, Line);
     yield();
     SendStatus(source, status);
     yield();
+/*
   } else {
     // Schedule to run async
     schedule_command_timer((char*)&cmd[0], &TempEvent, Line);
   }
+*/
 }
 
 #ifdef FEATURE_SD

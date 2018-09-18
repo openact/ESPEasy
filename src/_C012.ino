@@ -41,7 +41,7 @@ boolean CPlugin_012(byte function, struct EventStruct *event, String& string)
           PluginCall(PLUGIN_GET_DEVICEVALUENAMES, event, dummyString);
 
         ControllerSettingsStruct ControllerSettings;
-        LoadControllerSettings(event->ControllerIndex, (byte*)&ControllerSettings, sizeof(ControllerSettings));
+        LoadControllerSettings(event->ControllerIndex, ControllerSettings);
 
         for (byte x = 0; x < valueCount; x++)
         {
@@ -83,7 +83,7 @@ boolean Blynk_get(const String& command, byte controllerIndex, float *data )
   }
 
   ControllerSettingsStruct ControllerSettings;
-  LoadControllerSettings(controllerIndex, (byte*)&ControllerSettings, sizeof(ControllerSettings));
+  LoadControllerSettings(controllerIndex, ControllerSettings);
 
   if ((SecuritySettings.ControllerPassword[controllerIndex][0] == 0)) {
     addLog(LOG_LEVEL_ERROR, F("Blynk : No password set"));
@@ -113,7 +113,7 @@ boolean Blynk_get(const String& command, byte controllerIndex, float *data )
   char log[80] = {0};
 
   // Read all the lines of the reply from server and log them
-  while (client.available()) {
+  while (client_available(client)) {
     String line;
     safeReadStringUntil(client, line, '\n');
     addLog(LOG_LEVEL_DEBUG_MORE, line);
@@ -154,7 +154,7 @@ boolean Blynk_get(const String& command, byte controllerIndex, float *data )
   client.flush();
   client.stop();
 
-  // important - backgroudtasks - free mem
+  // important - backgroundtasks - free mem
   timer = millis() + Settings.MessageDelay;
   while (!timeOutReached(timer))
               backgroundtasks();

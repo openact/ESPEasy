@@ -1033,6 +1033,7 @@ void handle_config() {
       MQTTclient_should_reconnect = true;
     }
     strncpy(Settings.Name, name.c_str(), sizeof(Settings.Name));
+    Settings.appendUnitToHostname(isFormItemChecked(F("appendunittohostname")));
     //strncpy(SecuritySettings.Password, password.c_str(), sizeof(SecuritySettings.Password));
     copyFormPassword(F("password"), SecuritySettings.Password, sizeof(SecuritySettings.Password));
     strncpy(SecuritySettings.WifiSSID, ssid.c_str(), sizeof(SecuritySettings.WifiSSID));
@@ -1082,7 +1083,8 @@ void handle_config() {
   Settings.Name[25] = 0;
   SecuritySettings.Password[25] = 0;
   addFormTextBox( F("Unit Name"), F("name"), Settings.Name, 25);
-  addFormNumericBox( F("Unit Number"), F("unit"), Settings.Unit, 0, 9999);
+  addFormNumericBox( F("Unit Number"), F("unit"), Settings.Unit, 0, UNIT_NUMBER_MAX);
+  addFormCheckBox(F("Append Unit Number to hostname"), F("appendunittohostname"), Settings.appendUnitToHostname());
   addFormPasswordBox(F("Admin Password"), F("password"), SecuritySettings.Password, 25);
 
   addFormSubHeader(F("Wifi Settings"));
@@ -1262,7 +1264,7 @@ void handle_controllers() {
         CPlugin_ptr[ProtocolIndex](CPLUGIN_INIT, &TempEvent, dummyString);
       }
     }
-    addHtmlError(SaveControllerSettings(controllerindex, (byte*)&ControllerSettings, sizeof(ControllerSettings)));
+    addHtmlError(SaveControllerSettings(controllerindex, ControllerSettings));
     addHtmlError(SaveSettings());
   }
 
@@ -1276,7 +1278,7 @@ void handle_controllers() {
     ControllerSettingsStruct ControllerSettings;
     for (byte x = 0; x < CONTROLLER_MAX; x++)
     {
-      LoadControllerSettings(x, (byte*)&ControllerSettings, sizeof(ControllerSettings));
+      LoadControllerSettings(x, ControllerSettings);
       html_TR_TD();
       TXBuffer += F("<a class='button link' href=\"controllers?index=");
       TXBuffer += x + 1;
@@ -1332,7 +1334,7 @@ void handle_controllers() {
     if (Settings.Protocol[controllerindex])
     {
       ControllerSettingsStruct ControllerSettings;
-      LoadControllerSettings(controllerindex, (byte*)&ControllerSettings, sizeof(ControllerSettings));
+      LoadControllerSettings(controllerindex, ControllerSettings);
       byte choice = ControllerSettings.UseDNS;
       String options[2];
       options[0] = F("Use IP address");
@@ -2283,7 +2285,7 @@ void handle_devices() {
               html_TR_TD(); TXBuffer += F("IDX:<TD>");
               id = F("TDID");   //="taskdeviceid"
               id += controllerNr + 1;
-              addNumericBox(id, Settings.TaskDeviceID[controllerNr][taskIndex], 0, 999999999); // Looks like it is an unsigned int, so could be up to 4 bln.
+              addNumericBox(id, Settings.TaskDeviceID[controllerNr][taskIndex], 0, DOMOTICZ_MAX_IDX);
             }
           }
         }
@@ -4569,18 +4571,40 @@ void handle_filelist() {
     checkRuleSets();
   }
 
+  const int pageSize = 25;
+  int startIdx = 0;
 
+  String fstart = WebServer.arg(F("start"));
+  if (fstart.length() > 0)
+  {
+    startIdx = atoi(fstart.c_str());
+  }
+  int endIdx = startIdx + pageSize - 1;
 
   TXBuffer += F("<table class='multirow' border=1px frame='box' rules='all'><TH style='width:50px;'><TH>Filename<TH style='width:80px;'>Size");
 
   fs::Dir dir = SPIFFS.openDir("");
+
+  int count = -1;
   while (dir.next())
   {
+    ++count;
+
+    if (count < startIdx)
+    {
+      continue;
+    }
+
     html_TR_TD();
     if (dir.fileName() != F(FILE_CONFIG) && dir.fileName() != F(FILE_SECURITY) && dir.fileName() != F(FILE_NOTIFICATION))
     {
       TXBuffer += F("<a class='button link' href=\"filelist?delete=");
       TXBuffer += dir.fileName();
+      if (startIdx > 0)
+      {
+        TXBuffer += F("&start=");
+        TXBuffer += startIdx;
+      }
       TXBuffer += F("\">Del</a>");
     }
 
@@ -4592,9 +4616,26 @@ void handle_filelist() {
     fs::File f = dir.openFile("r");
     html_TD();
     TXBuffer += f.size();
+    if (count >= endIdx)
+    {
+      break;
+    }
   }
   TXBuffer += F("</table></form>");
-  TXBuffer += F("<BR><a class='button link' href=\"/upload\">Upload</a><BR><BR>");
+  TXBuffer += F("<BR><a class='button link' href=\"/upload\">Upload</a>");
+  if (startIdx > 0)
+  {
+    TXBuffer += F("<a class='button link' href=\"/filelist?start=");
+    TXBuffer += max(0, startIdx - pageSize);
+    TXBuffer += F("\">Previous</a>");
+  }
+  if (count >= endIdx and dir.next())
+  {
+    TXBuffer += F("<a class='button link' href=\"/filelist?start=");
+    TXBuffer += endIdx + 1;
+    TXBuffer += F("\">Next</a>");
+  }
+  TXBuffer += F("<BR><BR>");
     sendHeadandTail(F("TmplStd"),true);
     TXBuffer.endStream();
 #endif

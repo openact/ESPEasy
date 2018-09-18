@@ -357,6 +357,9 @@
 #define SENSOR_TYPE_LONG                   20
 #define SENSOR_TYPE_WIND                   21
 
+#define UNIT_NUMBER_MAX                  9999  // Stored in Settings.Unit
+#define DOMOTICZ_MAX_IDX            999999999  // Looks like it is an unsigned int, so could be up to 4 bln.
+
 #define VALUE_SOURCE_SYSTEM                 1
 #define VALUE_SOURCE_SERIAL                 2
 #define VALUE_SOURCE_HTTP                   3
@@ -393,13 +396,18 @@
 #endif
 
 // Forward declaration
+struct ControllerSettingsStruct;
 void scheduleNextDelayQueue(unsigned long id, unsigned long nextTime);
-String LoadControllerSettings(int ControllerIndex, byte* memAddress, int datasize);
+String LoadControllerSettings(int ControllerIndex, ControllerSettingsStruct& controller_settings);
 String get_formatted_Controller_number(int controller_index);
 bool loglevelActiveFor(byte logLevel);
 void addToLog(byte loglevel, const String& string);
 void addToLog(byte logLevel, const __FlashStringHelper* flashString);
 void statusLED(boolean traffic);
+void backgroundtasks();
+
+bool getBitFromUL(uint32_t number, byte bitnr);
+void setBitToUL(uint32_t& number, byte bitnr, bool value);
 
 enum SettingsType {
   BasicSettings_Type = 0,
@@ -443,6 +451,7 @@ bool showSettingsFileLayout = false;
 #include "I2CTypes.h"
 #include <I2Cdev.h>
 #include <map>
+#include <deque>
 
 #define FS_NO_GLOBALS
 #if defined(ESP8266)
@@ -657,6 +666,18 @@ struct SettingsStruct
     clearAll();
   }
 
+  // VariousBits1 defaults to 0, keep in mind when adding bit lookups.
+  bool appendUnitToHostname() {  return !getBitFromUL(VariousBits1, 1); }
+  void appendUnitToHostname(bool value) { setBitToUL(VariousBits1, 1, !value); }
+
+  void validate() {
+    if (UDPPort > 65535) UDPPort = 0;
+
+    if (Latitude  < -90.0  || Latitude > 90.0) Latitude = 0.0;
+    if (Longitude < -180.0 || Longitude > 180.0) Longitude = 0.0;
+    if (VariousBits1 > (1 << 30)) VariousBits1 = 0;
+  }
+
   void clearAll() {
     PID = 0;
     Version = 0;
@@ -699,6 +720,9 @@ struct SettingsStruct
     SyslogFacility = DEFAULT_SYSLOG_FACILITY;
     StructSize = 0;
     MQTTUseUnitNameAsClientId = 0;
+    Latitude = 0.0;
+    Longitude = 0.0;
+    VariousBits1 = 0;
 
     for (byte i = 0; i < CONTROLLER_MAX; ++i) {
       Protocol[i] = 0;
@@ -825,6 +849,7 @@ struct SettingsStruct
   //TODO: document config.dat somewhere here
   float         Latitude;
   float         Longitude;
+  uint32_t      VariousBits1;
 
   // FIXME @TD-er: As discussed in #1292, the CRC for the settings is now disabled.
   // make sure crc is the last value in the struct
@@ -864,6 +889,14 @@ struct ControllerSettingsStruct
   unsigned int  MaxQueueDepth;
   unsigned int  MaxRetry;
   boolean       DeleteOldest; // Action to perform when buffer full, delete oldest, or ignore newest.
+
+  void validate() {
+    if (Port > 65535) Port = 0;
+    if (MinimalTimeBetweenMessages < 1) MinimalTimeBetweenMessages = 100;
+    if (MinimalTimeBetweenMessages > 3600000) MinimalTimeBetweenMessages = 100;
+    if (MaxQueueDepth > 25) MaxQueueDepth = 10;
+    if (MaxRetry > 10) MaxRetry = 10;
+  }
 
   IPAddress getIP() const {
     IPAddress host(IP[0], IP[1], IP[2], IP[3]);
@@ -1240,6 +1273,9 @@ struct LogStruct {
 
 } Logging;
 
+std::deque<char> serialLogBuffer;
+unsigned long last_serial_log_emptied = 0;
+
 byte highest_active_log_level = 0;
 bool log_to_serial_disabled = false;
 // Do this in a template to prevent casting to String when not needed.
@@ -1374,17 +1410,19 @@ struct pinStatesStruct
 //max 40 bytes: ( 74 - 64 ) * 4
 struct RTCStruct
 {
+  RTCStruct() : ID1(0), ID2(0), unused1(false), factoryResetCounter(0),
+                deepSleepState(0), bootFailedCount(0), flashDayCounter(0),
+                flashCounter(0), bootCounter(0) {}
   byte ID1;
   byte ID2;
   boolean unused1;
   byte factoryResetCounter;
   byte deepSleepState;
-  byte unused2;
+  byte bootFailedCount;
   byte flashDayCounter;
   unsigned long flashCounter;
   unsigned long bootCounter;
 } RTC;
-
 
 int deviceCount = -1;
 int protocolCount = -1;

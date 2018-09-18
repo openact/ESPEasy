@@ -207,6 +207,19 @@ boolean hasPinState(byte plugin, byte index)
 
 
 /*********************************************************************************************\
+   Bitwise operators
+  \*********************************************************************************************/
+bool getBitFromUL(uint32_t number, byte bitnr) {
+  return (number >> bitnr) & 1UL;
+}
+
+void setBitToUL(uint32_t& number, byte bitnr, bool value) {
+  uint32_t newbit = value ? 1UL : 0UL;
+  number ^= (-newbit ^ number) & (1UL << bitnr);
+}
+
+
+/*********************************************************************************************\
    report pin mode & state (info table) using json
   \*********************************************************************************************/
 String getPinStateJSON(boolean search, byte plugin, byte index, String& log, uint16_t noSearchValue)
@@ -365,11 +378,11 @@ void parseCommandString(struct EventStruct *event, const String& string)
   event->Par4 = 0;
   event->Par5 = 0;
 
-  if (GetArgv(command, TmpStr1, 2)) event->Par1 = str2int(TmpStr1);
-  if (GetArgv(command, TmpStr1, 3)) event->Par2 = str2int(TmpStr1);
-  if (GetArgv(command, TmpStr1, 4)) event->Par3 = str2int(TmpStr1);
-  if (GetArgv(command, TmpStr1, 5)) event->Par4 = str2int(TmpStr1);
-  if (GetArgv(command, TmpStr1, 6)) event->Par5 = str2int(TmpStr1);
+  if (GetArgv(command, TmpStr1, 2)) event->Par1 = CalculateParam(TmpStr1);
+  if (GetArgv(command, TmpStr1, 3)) event->Par2 = CalculateParam(TmpStr1);
+  if (GetArgv(command, TmpStr1, 4)) event->Par3 = CalculateParam(TmpStr1);
+  if (GetArgv(command, TmpStr1, 5)) event->Par4 = CalculateParam(TmpStr1);
+  if (GetArgv(command, TmpStr1, 6)) event->Par5 = CalculateParam(TmpStr1);
 }
 
 /********************************************************************************************\
@@ -768,7 +781,7 @@ void ResetFactory(void)
   str2ip((char*)DEFAULT_SERVER, ControllerSettings.IP);
   ControllerSettings.HostName[0]=0;
   ControllerSettings.Port = DEFAULT_PORT;
-  SaveControllerSettings(0, (byte*)&ControllerSettings, sizeof(ControllerSettings));
+  SaveControllerSettings(0, ControllerSettings);
 #endif
   checkRAM(F("ResetFactory2"));
   Serial.println(F("RESET: Succesful, rebooting. (you might need to press the reset button if you've justed flashed the firmware)"));
@@ -1162,10 +1175,23 @@ boolean loglevelActive(byte logLevel, byte logLevelSettings) {
 
 void addToLog(byte logLevel, const char *line)
 {
+  const size_t line_length = strlen(line);
   if (loglevelActiveFor(LOG_TO_SERIAL, logLevel)) {
-    Serial.print(millis());
-    Serial.print(F(" : "));
-    Serial.println(line);
+    int roomLeft = ESP.getFreeHeap() - 5000;
+    if (roomLeft > 0) {
+      String timestamp_log(millis());
+      timestamp_log += F(" : ");
+      for (size_t i = 0; i < timestamp_log.length(); ++i) {
+        serialLogBuffer.push_back(timestamp_log[i]);
+      }
+      size_t pos = 0;
+      while (pos < line_length && pos < static_cast<size_t>(roomLeft)) {
+        serialLogBuffer.push_back(line[pos]);
+        ++pos;
+      }
+      serialLogBuffer.push_back('\r');
+      serialLogBuffer.push_back('\n');
+    }
   }
   if (loglevelActiveFor(LOG_TO_SYSLOG, logLevel)) {
     syslog(logLevel, line);
@@ -1184,6 +1210,25 @@ void addToLog(byte logLevel, const char *line)
 #endif
 }
 
+void process_serialLogBuffer() {
+  if (serialLogBuffer.size() == 0) return;
+  if (timePassedSince(last_serial_log_emptied) > 10000) {
+    last_serial_log_emptied = millis();
+    serialLogBuffer.clear();
+    return;
+  }
+  size_t snip = 128; // Some default, ESP32 doesn't have the availableForWrite function yet.
+#if defined(ESP8266)
+  snip = Serial.availableForWrite();
+#endif
+  if (snip > 0) last_serial_log_emptied = millis();
+  size_t bytes_to_write = serialLogBuffer.size();
+  if (snip < bytes_to_write) bytes_to_write = snip;
+  for (size_t i = 0; i < bytes_to_write; ++i) {
+    Serial.write(serialLogBuffer.front());
+    serialLogBuffer.pop_front();
+  }
+}
 
 /********************************************************************************************\
   Delayed reboot, in case of issues, do not reboot with high frequency as it might not help...
@@ -1788,6 +1833,12 @@ int Calculate(const char *input, float* result)
   //*sp=0; // bug, it stops calculating after 50 times
   sp = globalstack - 1;
   oc=c=0;
+
+  if (input[0] == '=') {
+    ++strpos;
+    c = *strpos;
+  }
+
   while (strpos < strend)
   {
     // read one token from the input stream
@@ -1913,6 +1964,56 @@ int Calculate(const char *input, float* result)
   return CALCULATE_OK;
 }
 
+int CalculateParam(char *TmpStr) {
+  int returnValue;
+
+  // Minimize calls to the Calulate function.
+  // Only if TmpStr starts with '=' then call Calculate(). Otherwise do not call it
+  if (TmpStr[0] != '=') {
+    returnValue=str2int(TmpStr);
+  } else {
+    float param=0;
+    TmpStr[0] = ' '; //replace '=' with space
+    int returnCode=Calculate(TmpStr, &param);
+    if (returnCode!=CALCULATE_OK) {
+      String errorDesc;
+      switch (returnCode) {
+        case CALCULATE_ERROR_STACK_OVERFLOW:
+          errorDesc = F("Stack Overflow");
+          break;
+        case CALCULATE_ERROR_BAD_OPERATOR:
+          errorDesc = F("Bad Operator");
+          break;
+        case CALCULATE_ERROR_PARENTHESES_MISMATCHED:
+          errorDesc = F("Parenthesis mismatch");
+          break;
+        case CALCULATE_ERROR_UNKNOWN_TOKEN:
+          errorDesc = F("Unknown token");
+          break;
+        default:
+          errorDesc = F("Unknown error");
+          break;
+        }
+        String log = String(F("CALCULATE PARAM ERROR: ")) + errorDesc;
+        addLog(LOG_LEVEL_ERROR, log);
+        log = F("CALCULATE PARAM ERROR details: ");
+        log += TmpStr;
+        log += F(" = ");
+        log += round(param);
+        addLog(LOG_LEVEL_ERROR, log);
+      } else {
+      if (loglevelActiveFor(LOG_LEVEL_DEBUG)) {
+        String log = F("CALCULATE PARAM: ");
+        log += TmpStr;
+        log += F(" = ");
+        log += round(param);
+        addLog(LOG_LEVEL_DEBUG, log);
+      }
+    }
+    returnValue=round(param); //return integer only as it's valid only for device and task id
+  }
+  return returnValue;
+}
 
 void checkRuleSets(){
 for (byte x=0; x < RULESETS_MAX; x++){
@@ -2036,7 +2137,7 @@ String rulesProcessingFile(String fileName, String& event)
             match, codeBlock, isCommand,
             conditional, condition,
             ifBranche, ifBrancheJustMatch);
-          yield();
+          backgroundtasks();
         }
 
         line = "";
@@ -2222,7 +2323,20 @@ void processMatchedRule(
       if (equalsPos > 0)
       {
         String tmpString = event.substring(equalsPos + 1);
-        action.replace(F("%eventvalue%"), tmpString); // substitute %eventvalue% in actions with the actual value from the event
+
+        char command[INPUT_COMMAND_SIZE];
+        command[0] = 0;
+        char tmpParam[INPUT_COMMAND_SIZE];
+        tmpParam[0] = 0;
+        tmpString.toCharArray(command, INPUT_COMMAND_SIZE);
+
+        if (GetArgv(command,tmpParam,1)) {
+           action.replace(F("%eventvalue%"), tmpParam); // for compatibility issues
+           action.replace(F("%eventvalue1%"), tmpParam); // substitute %eventvalue1% in actions with the actual value from the event
+        }
+        if (GetArgv(command,tmpParam,2)) action.replace(F("%eventvalue2%"), tmpParam); // substitute %eventvalue2% in actions with the actual value from the event
+        if (GetArgv(command,tmpParam,3)) action.replace(F("%eventvalue3%"), tmpParam); // substitute %eventvalue3% in actions with the actual value from the event
+        if (GetArgv(command,tmpParam,4)) action.replace(F("%eventvalue4%"), tmpParam); // substitute %eventvalue4% in actions with the actual value from the event
       }
     }
 
